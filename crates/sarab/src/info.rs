@@ -17,7 +17,15 @@
 //!
 //! `install_hint` turns a package name into the install command for the
 //! distro in /etc/os-release (`ID`, then `ID_LIKE`), for the messages that
-//! say what is missing.
+//! say what is missing; `install_hint_named` does it for a package whose name
+//! differs by family, given in the order Arch, Debian, Fedora, SUSE
+//! (`GEOCLUE`).
+//!
+//! The location row only says whether GeoClue is installed, by its D-Bus
+//! activation file (`geoclue_installed`): asking GeoClue itself would start it
+//! and may send the machine's Wi-Fi networks or address to a location service,
+//! which a status command must not do. Whether an agent lets it answer, and
+//! how accurate its answer is, is in hostd's log, which sees every fix.
 
 use crate::paths;
 use anyhow::{Result, bail};
@@ -31,12 +39,24 @@ pub fn subid_files() -> (String, String) {
     (read("/etc/subuid"), read("/etc/subgid"))
 }
 
+pub const GEOCLUE: [&str; 4] = ["geoclue", "geoclue-2.0", "geoclue2", "geoclue2"];
+
 pub fn install_hint(package: &str) -> String {
-    let os = std::fs::read_to_string("/etc/os-release").unwrap_or_default();
-    install_command(&os, package).unwrap_or_else(|| format!("install the {package} package"))
+    install_hint_named([package; 4])
 }
 
-fn install_command(os_release: &str, package: &str) -> Option<String> {
+pub fn install_hint_named(names: [&str; 4]) -> String {
+    let os = std::fs::read_to_string("/etc/os-release").unwrap_or_default();
+    install_command(&os, names).unwrap_or_else(|| format!("install the {} package", names[0]))
+}
+
+pub fn geoclue_installed() -> bool {
+    ["/usr/share/dbus-1/system-services", "/usr/local/share/dbus-1/system-services"]
+        .iter()
+        .any(|d| Path::new(d).join("org.freedesktop.GeoClue2.service").is_file())
+}
+
+fn install_command(os_release: &str, names: [&str; 4]) -> Option<String> {
     let field = |k: &str| {
         os_release
             .lines()
@@ -45,11 +65,11 @@ fn install_command(os_release: &str, package: &str) -> Option<String> {
             .unwrap_or_default()
     };
     let ids = format!("{} {}", field("ID"), field("ID_LIKE"));
-    let tool = ids.split_whitespace().find_map(|id| match id {
-        "arch" => Some("pacman -S"),
-        "debian" | "ubuntu" => Some("apt install"),
-        "fedora" | "rhel" => Some("dnf install"),
-        "suse" | "opensuse" => Some("zypper install"),
+    let (tool, package) = ids.split_whitespace().find_map(|id| match id {
+        "arch" => Some(("pacman -S", names[0])),
+        "debian" | "ubuntu" => Some(("apt install", names[1])),
+        "fedora" | "rhel" => Some(("dnf install", names[2])),
+        "suse" | "opensuse" => Some(("zypper install", names[3])),
         _ => None,
     })?;
     Some(format!("sudo {tool} {package}"))
@@ -187,6 +207,14 @@ pub fn info(dirs: &paths::Dirs) -> Result<()> {
     let missing: Vec<String> =
         HOST_TOOLS.iter().filter(|(b, _)| !on_path(b)).map(|(b, pkg)| format!("{b} ({pkg})")).collect();
     row("tools", &if missing.is_empty() { "ok".to_string() } else { format!("MISSING {}", missing.join(", ")) });
+    row(
+        "location",
+        &if geoclue_installed() {
+            "GeoClue (the hostd log says how accurate its location is)".to_string()
+        } else {
+            format!("MISSING: apps get no location; fix: {}", install_hint_named(GEOCLUE))
+        },
+    );
     Ok(())
 }
 
@@ -283,7 +311,7 @@ mod tests {
 
     #[test]
     fn the_install_line_follows_the_distro() {
-        let hint = |os: &str| install_command(os, "passt");
+        let hint = |os: &str| install_command(os, ["passt"; 4]);
         assert_eq!(hint("NAME=\"Arch Linux\"\nID=arch\n").as_deref(), Some("sudo pacman -S passt"));
         assert_eq!(hint("ID=ubuntu\nID_LIKE=debian\n").as_deref(), Some("sudo apt install passt"));
         assert_eq!(hint("ID=linuxmint\nID_LIKE=\"ubuntu debian\"\n").as_deref(), Some("sudo apt install passt"));
@@ -295,6 +323,10 @@ mod tests {
         assert_eq!(hint("ID=endeavouros\nID_LIKE=arch\n").as_deref(), Some("sudo pacman -S passt"));
         assert_eq!(hint("ID=nixos\n"), None);
         assert_eq!(hint(""), None);
+        let geoclue = |os: &str| install_command(os, GEOCLUE);
+        assert_eq!(geoclue("ID=arch\n").as_deref(), Some("sudo pacman -S geoclue"));
+        assert_eq!(geoclue("ID=ubuntu\nID_LIKE=debian\n").as_deref(), Some("sudo apt install geoclue-2.0"));
+        assert_eq!(geoclue("ID=fedora\n").as_deref(), Some("sudo dnf install geoclue2"));
     }
 
     #[test]

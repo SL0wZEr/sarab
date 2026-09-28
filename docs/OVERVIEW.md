@@ -60,7 +60,12 @@ Crates (`crates/`):
   thaw / reclaim of the runtime cgroup; every inbound command thaws first.
 - **sarab-hostd** — serves the four binder interfaces Android expects *from*
   the host (clipboard, notifications, user monitor, hardware). Must register
-  before system_server binds them once at boot. Exits with the runtime via
+  before system_server binds them once at boot. Also serves Android's GNSS
+  HAL (AIDL `android.hardware.gnss.IGnss/default`, version 2), fed by the
+  desktop's GeoClue while an app asks for location; `sarab start` adds its
+  declaration to the vendor VINTF manifest through the generated overlay,
+  and only when hostd runs, since system_server waits for a declared HAL
+  without a timeout. Exits with the runtime via
   `pidfd_open` + poll, so no stale daemons. It also relays Android's
   Wayland connection to the compositor (Window size, below), which makes it
   display-critical: if hostd dies, every Android window goes with it, so

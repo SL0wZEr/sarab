@@ -144,7 +144,7 @@ reaches (above).
 - **Only Android's `system` uid can call the host services.**
   `sarab-hostd` checks the kernel-reported caller of every binder
   transaction. An ordinary app that calls the clipboard, notification,
-  launcher or power service directly is refused, and the refusal is logged
+  launcher, power or location service directly is refused, and the refusal is logged
   (`sarab logs --hostd`). The `system` uid is `system_server` and every app
   that shares its uid: Android's own platform-signed apps (Settings among
   them) and, with this image, any app signed with the public test key
@@ -152,6 +152,17 @@ reaches (above).
   processes can name themselves anything. For every other app, the host
   clipboard is read only through Android's own clipboard service, with
   Android's focus rule, and only Android's power menu can stop the runtime.
+- **Your location reaches only apps Android lets have it.** `sarab-hostd`
+  serves Android's GPS interface (the GNSS HAL) with the location GeoClue
+  gives the desktop. Only `system_server` can call it (above), and Android
+  passes a location only to apps holding the location permission, and only
+  while its location switch is on. GeoClue is asked only while some app is
+  asking, and stopped when none is. A location that arrives outside such a
+  session is dropped. On the host, GeoClue decides whether to answer at all:
+  it answers a program like `sarab-hostd` only while a GeoClue agent allows
+  it, and turning location off in the desktop (GNOME's switch, or not
+  running an agent) turns it off for Android too. The hostd log records how
+  accurate the location is, never the coordinates.
 - **Desktop entries are built from checked input.** Package names must be
   package names before they are used in a file name. Control characters in an
   app's label are replaced, so a label cannot add lines to the `.desktop`

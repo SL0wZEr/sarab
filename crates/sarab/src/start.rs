@@ -34,6 +34,8 @@
 //! as stock. `overlay_binds` merges the hand-written and the generated overlay,
 //! one bind per target, the hand-written file winning, and uses
 //! `symlink_metadata` to match `find -type f`, which does not follow links.
+//! `for_hostd` drops the generated vendor manifest under `--no-hostd`: it
+//! declares hostd's GNSS HAL, and system_server would wait for it forever.
 //! Every path is absolute, so nothing depends on the working directory.
 //! `socket_binds` gives Android one socket each (Wayland, and Pulse when
 //! present), never `/run/user/<uid>`: that directory also holds the session bus
@@ -218,6 +220,14 @@ pub fn overlay_binds(generated: &Path, overlay: &Path) -> Result<Vec<String>> {
         .into_iter()
         .map(|(dst, src): (PathBuf, PathBuf)| format!("{}:/{}", src.display(), dst.display()))
         .collect())
+}
+
+fn for_hostd(mut binds: Vec<String>, hostd: bool) -> Vec<String> {
+    if !hostd {
+        let manifest = format!(":/{}", crate::overlay::VINTF);
+        binds.retain(|b| !b.ends_with(&manifest));
+    }
+    binds
 }
 
 fn walk(dir: &Path, top: &Path, out: &mut std::collections::BTreeMap<PathBuf, PathBuf>) -> Result<()> {
@@ -570,7 +580,7 @@ fn boot(o: &Opts, dirs: &crate::paths::Dirs) -> Result<(std::process::ExitStatus
             sockets: socket_binds(&runtime_dir, &wayland, relay.as_deref()),
         },
         o,
-        &overlay_binds(&dirs.generated(), &dirs.overlay)?,
+        &for_hostd(overlay_binds(&dirs.generated(), &dirs.overlay)?, o.hostd),
         std::process::id(),
     );
     let mut cmd = Command::new(&argv[0]);
@@ -844,6 +854,16 @@ mod tests {
         }
         assert_eq!(back, binds);
         assert!(bind_lines(&[]).is_empty());
+    }
+
+    #[test]
+    fn without_hostd_android_is_not_told_of_its_gnss_hal() {
+        let binds = vec![
+            "/w/generated/vendor/etc/vintf/manifest.xml:/vendor/etc/vintf/manifest.xml".to_string(),
+            "/w/overlay/system/etc/ueventd.rc:/system/etc/ueventd.rc".to_string(),
+        ];
+        assert_eq!(for_hostd(binds.clone(), true), binds);
+        assert_eq!(for_hostd(binds.clone(), false), binds[1..]);
     }
 
     #[test]

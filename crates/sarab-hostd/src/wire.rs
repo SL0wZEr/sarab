@@ -1,4 +1,4 @@
-//! Small helpers shared by the four services.
+//! Small helpers shared by the five services.
 //!
 //! The image's Java side speaks plain (non-AIDL-generated) binder: every
 //! reply begins with an int32 exception code, which is what
@@ -21,6 +21,7 @@
 //! translated through the runtime's `/proc/<init>/uid_map` (100999 with a
 //! subuid range starting at 100000). Refusals are logged: the legitimate
 //! caller never trips the gate, so a refusal means an app is probing.
+//! `Gate::for_uid` builds one without a runtime, for tests.
 
 use anyhow::{Context, Result};
 use rsbinder::*;
@@ -46,6 +47,11 @@ impl Gate {
         let system =
             host_uid(&map, ANDROID_SYSTEM).with_context(|| format!("uid {ANDROID_SYSTEM} is not mapped in {path}"))?;
         Ok(Self { system })
+    }
+
+    #[cfg(test)]
+    pub fn for_uid(system: u32) -> Self {
+        Self { system }
     }
 
     pub fn check(&self, service: &str) -> rsbinder::Result<()> {

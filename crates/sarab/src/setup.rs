@@ -470,6 +470,7 @@ fn prepare(o: &Opts) -> Result<()> {
         "overlay: {written} init files rewritten for a rootless runtime, {skipped} shadowed by /system"
     ));
     ui::detail(format!("overlay: hwcomposer scale fix {}", overlay::patch_hwcomposer(&dirs.data, &dirs.generated())?));
+    ui::detail(format!("overlay: GNSS HAL {}", overlay::declare_gnss(&dirs.data, &dirs.generated())?));
     std::fs::create_dir_all(dirs.android_data())?;
     std::fs::create_dir_all(&dirs.state)?;
     Ok(())

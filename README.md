@@ -14,6 +14,7 @@ You need:
 - Linux on x86_64, with a Wayland desktop
 - A GPU that Mesa drives: AMD, Intel, or NVIDIA with nouveau (NVIDIA's proprietary driver does not work)
 - Rust 1.88 or newer, to build
+- For apps that ask where you are: GeoClue (see [Location](#location))
 
 ```sh
 git clone https://github.com/SL0wZEr/sarab && cd sarab
@@ -70,6 +71,36 @@ packaging/install.sh uninstall --prefix ~/.local           # keeps Android and i
 packaging/install.sh uninstall --prefix ~/.local --purge   # deletes them too
 ```
 
+## Location
+
+Apps get your computer's location, from GeoClue, the desktop's location
+service. Install it (`geoclue` on Arch, `geoclue-2.0` on Debian and Ubuntu,
+`geoclue2` on Fedora). GeoClue answers only while an agent allows it: GNOME
+has one built in, and its location switch turns it on and off. On other
+desktops GeoClue's demo agent does it, and most packages start it at login.
+Android asks only while an app wants your location, and only apps you gave
+the location permission get it.
+
+How good the location is depends on what GeoClue can use, and apps are told
+the real accuracy. Your IP address alone is only good to the nearest few
+kilometres, and apps that ask Google Play services for a precise location
+(delivery and ride apps) ignore that. `sarab logs --hostd` shows how
+accurate the last one was. To do better:
+
+- **A laptop with Wi-Fi** is located from the networks around it, where
+  GeoClue's service, [BeaconDB](https://beacondb.net), knows them.
+- **A computer that stays put** can be given its location once, in
+  `/etc/geolocation`: latitude, longitude, altitude, and how far off it may
+  be, in metres, one per line.
+
+  ```
+  printf '%s\n' 51.5007 -0.1246 0 30 | sudo tee /etc/geolocation
+  ```
+
+  Remember it is there if the computer moves.
+- **A GPS receiver**, or a phone sharing its GPS on your network, is read by
+  GeoClue itself.
+
 ## Limitations
 
 - **x86 apps only.** Apps built only for ARM phones will not install.
@@ -81,6 +112,7 @@ packaging/install.sh uninstall --prefix ~/.local --purge   # deletes them too
   services.
 - **Tiling window managers.** Hyprland and sway float app windows on their
   own. Others may need a float rule for app ids starting with `waydroid.`.
+- **Location is the computer's, not a GPS fix.** See [Location](#location).
 
 The full list is in [docs/TODO.md](docs/TODO.md).
 
@@ -97,8 +129,8 @@ Android's system and take full control of Android. See
 
 Sarab runs an unmodified LineageOS 20 (Android 13) image as ordinary
 processes under your user. A small host side, written in Rust, connects it to
-your desktop: windows, clipboard, notifications, launcher entries and dark
-mode. See [docs/OVERVIEW.md](docs/OVERVIEW.md).
+your desktop: windows, clipboard, notifications, launcher entries, dark
+mode and location. See [docs/OVERVIEW.md](docs/OVERVIEW.md).
 
 ## Credits
 

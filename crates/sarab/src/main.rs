@@ -213,7 +213,7 @@ struct StartArgs {
     #[arg(
         long,
         requires = "foreground",
-        help = "Do not start the host services (clipboard, notifications, launcher entries)"
+        help = "Do not start the host services (clipboard, notifications, launcher entries, location)"
     )]
     no_hostd: bool,
     #[arg(long, requires = "foreground", help = "Boot without networking")]
@@ -281,7 +281,7 @@ struct LogsArgs {
     kernel: bool,
     #[arg(long, group = "source", help = "The runtime owner's own output (sarab start)")]
     daemon: bool,
-    #[arg(long, group = "source", help = "The host services: clipboard, notifications, launcher entries")]
+    #[arg(long, group = "source", help = "The host services: clipboard, notifications, launcher entries, location")]
     hostd: bool,
     #[arg(last = true, help = "Extra logcat arguments, after `--` (e.g. -- -s ActivityManager)")]
     logcat: Vec<String>,

@@ -4,7 +4,8 @@
 //! clipboard, notifications, a package/user monitor and a hardware control
 //! channel. The image's framework patches call them over binder; this serves
 //! that contract from Rust, talking to the namespace's binder device from
-//! outside the namespace.
+//! outside the namespace. It also serves Android's own GNSS HAL, fed by the
+//! desktop's location (location.rs).
 //!
 //! `--icon-helper PID PACKAGE` is a private mode: the icon extractor
 //! re-executes this binary inside the runtime's namespaces, so `main` checks
@@ -18,7 +19,12 @@
 //! that, the connect included, since handle 0 is a dead object until then (a
 //! connect outside the loop lost that race after a `sarab restart`).
 //! servicemanager starts very early in init, well before system_server binds
-//! our services. The binder thread pool is joined for the life of the process;
+//! our services. The GNSS HAL is registered first, and its failure is only
+//! logged: the vendor manifest declares it, and system_server waits for a
+//! declared HAL without a timeout, so any other service failing to register
+//! must not keep it from being there. `--no-location` is for a hostd run by
+//! hand against an Android whose manifest does not declare it (`sarab start
+//! --no-hostd`); servicemanager refuses the registration there anyway. The binder thread pool is joined for the life of the process;
 //! if it ever returns, hostd fails (a non-zero exit, which start.rs treats as a
 //! crash) unless it relays the display, which it then keeps doing.
 //! `exit_with_runtime` retries its poll only when a signal interrupted it, and
@@ -50,6 +56,7 @@ mod apk;
 mod clipboard;
 mod clipboard_native;
 mod hardware;
+mod location;
 mod notifications;
 mod theme;
 mod usermonitor;
@@ -77,6 +84,8 @@ sarab-hostd [options]
   --no-notifications   skip the notification service
   --no-usermonitor     skip desktop-entry management
   --no-hardware        skip the hardware service
+  --no-location        skip the GNSS HAL (Android's location from the desktop's
+                       GeoClue); only for an Android that does not declare it
   --no-theme           leave Android's dark theme alone instead of following
                        the desktop's
   --sync               write desktop entries for installed apps at startup
@@ -100,6 +109,7 @@ struct Opts {
     notifications: bool,
     usermonitor: bool,
     hardware: bool,
+    location: bool,
     theme: bool,
     sync: bool,
     wait: Option<u64>,
@@ -122,6 +132,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Opts> {
         notifications: true,
         usermonitor: true,
         hardware: true,
+        location: true,
         theme: true,
         sync: false,
         wait: None,
@@ -143,6 +154,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Opts> {
             "--no-notifications" => o.notifications = false,
             "--no-usermonitor" => o.usermonitor = false,
             "--no-hardware" => o.hardware = false,
+            "--no-location" => o.location = false,
             "--no-theme" => o.theme = false,
             "--sync" => o.sync = true,
             "--wait" => {
@@ -262,6 +274,14 @@ fn register(opts: &Opts, pid: u32, binder: PathBuf) -> Result<()> {
 
     let gate = wire::Gate::for_runtime(pid)?;
     let mut registered: Vec<&str> = Vec::new();
+
+    if opts.location {
+        let svc = Binder::new_with_stability(location::Gnss::new(gate), Stability::Vintf);
+        match add_service(&sm, location::SERVICE_NAME, &svc.as_binder()) {
+            Ok(()) => registered.push(location::SERVICE_NAME),
+            Err(e) => logln!("location: disabled ({e:#})"),
+        }
+    }
 
     if opts.clipboard {
         match clipboard::open(opts.clipboard_backend) {

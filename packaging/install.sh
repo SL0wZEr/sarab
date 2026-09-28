@@ -41,8 +41,10 @@
 # (package passt) when it is missing, for this distro as /etc/os-release names
 # it, read in a subshell so its variables stay out of this script (the
 # directive under the shebang tells shellcheck not to look for that file,
-# which is the host's, not the repository's): Android
-# does not boot without it (net.rs). Where the kernel restricts user
+# which is the host's, not the repository's): Android does not boot without
+# it (net.rs). GeoClue gets the same kind of line, marked optional, since only
+# apps that ask for a location need it; its package name differs by distro,
+# and `sarab info` has the same table. Where the kernel restricts user
 # namespaces (kernel.apparmor_restrict_unprivileged_userns=1, Ubuntu 23.10 and
 # later) and /etc/apparmor.d/sarab-ns is not exactly the profile `sarab
 # apparmor-profile` prints for this install, they give the one sudo line that
@@ -250,6 +252,20 @@ if ! command -v pasta >/dev/null; then
     esac
   )
   echo "needed: pasta, Android's network, which sarab will not boot without: $PM"
+fi
+if [ ! -f /usr/share/dbus-1/system-services/org.freedesktop.GeoClue2.service ] &&
+  [ ! -f /usr/local/share/dbus-1/system-services/org.freedesktop.GeoClue2.service ]; then
+  PM=$(
+    . /etc/os-release 2>/dev/null || true
+    case " ${ID:-} ${ID_LIKE:-} " in
+      *" arch "*) echo "sudo pacman -S geoclue" ;;
+      *" debian "* | *" ubuntu "*) echo "sudo apt install geoclue-2.0" ;;
+      *" fedora "* | *" rhel "*) echo "sudo dnf install geoclue2" ;;
+      *" suse "* | *" opensuse "*) echo "sudo zypper install geoclue2" ;;
+      *) echo "install the geoclue package" ;;
+    esac
+  )
+  echo "optional: GeoClue, for apps that ask where you are (README, Location): $PM"
 fi
 if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = 1 ] &&
   [ "$("$SARAB" apparmor-profile)" != "$(cat /etc/apparmor.d/sarab-ns 2>/dev/null)" ]; then

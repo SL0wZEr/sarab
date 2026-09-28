@@ -313,6 +313,13 @@ With the vendor built, the composer's display hotplug for window resizing
 
 ## Desktop integration
 
+- [ ] `P2` `partly done` **Location on every desktop.** hostd serves
+      Android's GNSS HAL from GeoClue (location.rs). Works on Hyprland with
+      GeoClue's demo agent (2026-09-28): an IP-only fix (25 km) reached
+      Android but Google Play services dropped it, a 50 m one from
+      `/etc/geolocation` reached the app. Test GNOME's built-in agent, and
+      KDE, which may have none. `sarab info` says whether GeoClue is
+      installed; whether an agent runs is only in the hostd log.
 - [ ] `P2` `from code` **A late notification daemon disables notifications
       for the boot.** hostd gives up if the daemon is not on the bus when it
       starts. Register the service anyway and connect on the first
@@ -344,7 +351,7 @@ With the vendor built, the composer's display hotplug for window resizing
 - [ ] `P3` `from code` The APK handler's `Exec` path in install.sh is not
       escaped per the Desktop Entry spec.
 - [ ] `P3` `open` `sarab info` does not say which host services (clipboard,
-      notifications) are off, or why.
+      notifications, location) are off, or why.
 
 ## Apps
 

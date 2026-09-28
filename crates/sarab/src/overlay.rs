@@ -1,7 +1,7 @@
 //! The overlay files generated from the image, rather than written by hand:
 //! init .rc files stripped of directives a rootless init cannot honour and of
-//! the ones that start adbd, and the hwcomposer with its fractional-scale bug
-//! patched. `sarab setup` writes them to the data directory's `generated/`,
+//! the ones that start adbd, the hwcomposer with its fractional-scale bug
+//! patched, and the vendor VINTF manifest with sarab-hostd's GNSS HAL declared. `sarab setup` writes them to the data directory's `generated/`,
 //! never to the hand-written overlay, and a path the hand-written overlay has
 //! is not generated at all, so each file comes from exactly one place.
 //!
@@ -78,6 +78,18 @@
 //! unless `ORIGINAL` occurs exactly once: the point is to touch one function,
 //! and a different image build is a reason to stop, not to guess.
 
+//!
+//! The manifest: Android takes a location from a GNSS HAL, and sarab-hostd
+//! serves one (its location.rs) as a stable AIDL service, which servicemanager
+//! registers and the framework looks for only when a VINTF manifest declares
+//! it. A new fragment file cannot be bound into the image, since a bind needs
+//! a file to cover, so `declare_gnss` copies the image's `VINTF` with
+//! `GNSS_HAL` inserted before its `</manifest>`. It refuses an image whose
+//! manifest has no single closing tag, or that declares a GNSS HAL of its own,
+//! rather than guess which one Android should use. The declaration makes
+//! system_server wait for the HAL while it starts, so `sarab start` leaves this
+//! file out when hostd does not run (start.rs). It is written `RC_MODE`, like
+//! the .rc files, and rewritten only when its content changes.
 use anyhow::{Context, Result, bail};
 use std::collections::BTreeSet;
 use std::os::unix::fs::PermissionsExt;
@@ -203,6 +215,7 @@ pub fn refresh(images: &Path, generated: &Path, overlay: &Path) -> Result<()> {
     secure_overlay(overlay)?;
     generate_rc(images, generated, overlay)?;
     patch_hwcomposer(images, generated)?;
+    declare_gnss(images, generated)?;
     Ok(())
 }
 
@@ -261,6 +274,39 @@ pub fn patch_hwcomposer(images: &Path, generated: &Path) -> Result<&'static str>
     std::fs::write(&dst, &blob)?;
     std::fs::set_permissions(&dst, std::fs::metadata(&src)?.permissions())?;
     Ok("patched")
+}
+
+pub const VINTF: &str = "vendor/etc/vintf/manifest.xml";
+
+const GNSS_HAL: &str = "    <hal format=\"aidl\">
+        <name>android.hardware.gnss</name>
+        <version>2</version>
+        <fqname>IGnss/default</fqname>
+    </hal>
+";
+
+pub fn declare_gnss(images: &Path, generated: &Path) -> Result<&'static str> {
+    let src = images.join(VINTF);
+    let dst = generated.join(VINTF);
+    let text = read_lossy(&src)?;
+    if text.contains("<name>android.hardware.gnss</name>") {
+        bail!(
+            "{} declares a GNSS HAL of its own; this image differs from the one Sarab was written for",
+            src.display()
+        );
+    }
+    let ends: Vec<usize> = text.match_indices("</manifest>").map(|(i, _)| i).collect();
+    let [end] = ends[..] else {
+        bail!("expected one </manifest> in {}, found {}", src.display(), ends.len());
+    };
+    let new = format!("{}{GNSS_HAL}{}", &text[..end], &text[end..]);
+    if std::fs::read_to_string(&dst).ok().as_deref() == Some(new.as_str()) {
+        return Ok("already declared");
+    }
+    std::fs::create_dir_all(dst.parent().unwrap())?;
+    std::fs::write(&dst, &new)?;
+    std::fs::set_permissions(&dst, std::fs::Permissions::from_mode(RC_MODE))?;
+    Ok("declared")
 }
 
 #[cfg(test)]
@@ -379,5 +425,28 @@ mod tests {
             let kept: Vec<&str> = text.lines().filter(|l| dropped(l)).collect();
             assert!(kept.is_empty(), "{} keeps {kept:?}", f.display());
         }
+    }
+
+    #[test]
+    fn the_gnss_hal_is_declared_once_before_the_closing_tag() {
+        let d = std::env::temp_dir().join(format!("sarab-overlay-vintf-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let (images, generated) = (d.join("images"), d.join("generated"));
+        std::fs::create_dir_all(images.join("vendor/etc/vintf")).unwrap();
+        let src = images.join(VINTF);
+        let stock = "<manifest version=\"5.0\" type=\"device\">\n    <hal format=\"hidl\"/>\n</manifest>\n";
+        std::fs::write(&src, stock).unwrap();
+        assert_eq!(declare_gnss(&images, &generated).unwrap(), "declared");
+        let out = std::fs::read_to_string(generated.join(VINTF)).unwrap();
+        assert!(out.starts_with(
+            "<manifest version=\"5.0\" type=\"device\">\n    <hal format=\"hidl\"/>\n    <hal format=\"aidl\">"
+        ));
+        assert!(out.ends_with("<fqname>IGnss/default</fqname>\n    </hal>\n</manifest>\n"), "{out}");
+        assert_eq!(declare_gnss(&images, &generated).unwrap(), "already declared");
+        std::fs::write(&src, out).unwrap();
+        assert!(declare_gnss(&images, &generated).unwrap_err().to_string().contains("GNSS HAL of its own"));
+        std::fs::write(&src, "<manifest>").unwrap();
+        assert!(declare_gnss(&images, &generated).unwrap_err().to_string().contains("found 0"));
+        std::fs::remove_dir_all(&d).unwrap();
     }
 }

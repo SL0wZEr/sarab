@@ -1,0 +1,279 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC1091
+# One command for a fresh machine: `sarab` on PATH, a systemd *user* unit, the
+# APK file handler and shell completion. No root, and it never calls systemctl
+# itself -- it prints the commands, because enabling the unit boots Android and
+# that is not this script's decision to make.
+#   packaging/install.sh [--no-build]
+#       link ~/.local/bin/sarab into this checkout's target/release; the image,
+#       logs and runtime files stay in the checkout (paths.rs, checkout mode)
+#   packaging/install.sh --prefix DIR [--libexecdir DIR] [--no-build]
+#       copy into DIR, which must be outside the checkout: bin/sarab, the
+#       helpers in lib/sarab (or --libexecdir, which is then built into sarab),
+#       share/sarab/overlay (the tracked files only, 644 or 755 whatever the
+#       checkout's modes, since init skips a group-writable .rc and a clone
+#       under umask 002 has them), share/doc/sarab (README.md, SECURITY.md,
+#       LICENSE and docs/, laid out as in the checkout so the links between
+#       them hold, and replaced whole like the overlay); the image and logs go
+#       to the XDG directories (installed mode)
+#   packaging/install.sh uninstall [--prefix DIR [--libexecdir DIR]] [--purge]
+#       remove exactly what the same install created; the image and Android's
+#       data only with --purge, which runs `sarab purge --yes` first, while
+#       sarab is still there (their files belong to subuids, and only sarab can
+#       delete them); with Android running it stops before removing anything.
+#       The launcher entries sarab-hostd wrote for Android's apps (sarab.*.desktop
+#       with an X-Sarab-Package= line) and their icons go either way: they
+#       would run a sarab that is gone. Android writes them again at its next
+#       boot if sarab is installed again.
+# Re-running either install is safe. The two modes share the unit, the handler
+# and the completions, so installing one replaces the other's.
+#
+# Double-clicking an APK installs it: a hidden desktop entry (NoDisplay, it is
+# a verb, not an app) runs `sarab install %f`, which answers with a notification
+# when there is no terminal. Split bundles get a MIME type of their own. The
+# handler becomes the default only where there is none, so a user who chose
+# another APK tool keeps it. Bash and fish completion are written too.
+#
+# The Android image is not this script's job: the first `sarab start` offers
+# to download it (`sarab setup` has the options). The closing hints look for it
+# where sarab will (paths.rs): the checkout's images/, or the saved data
+# directory, or the default one. They also give the install line for pasta
+# (package passt) when it is missing, for this distro as /etc/os-release names
+# it, read in a subshell so its variables stay out of this script (the
+# directive under the shebang tells shellcheck not to look for that file,
+# which is the host's, not the repository's): Android
+# does not boot without it (net.rs). Where the kernel restricts user
+# namespaces (kernel.apparmor_restrict_unprivileged_userns=1, Ubuntu 23.10 and
+# later) and /etc/apparmor.d/sarab-ns is not exactly the profile `sarab
+# apparmor-profile` prints for this install, they give the one sudo line that
+# installs and loads it; without it sarab-ns cannot build Android's namespace.
+# Uninstall leaves that profile, being root's, and prints the line that
+# removes it. An update is when an image upgrade falls due, so the hints end
+# with `sarab upgrade --check`'s lines and the command, when it has any; the
+# upgrade restarts a running Android itself, so the restart hint is only for
+# an update that brought no new image.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+ROOT=$PWD
+ACTION=install BUILD=1 PREFIX='' LIBEXECDIR='' PURGE=''
+while [ $# -gt 0 ]; do
+  case "$1" in
+    uninstall) ACTION=uninstall ;;
+    --no-build) BUILD= ;;
+    --purge) PURGE=1 ;;
+    --prefix) PREFIX=$(realpath -m "${2:?--prefix needs a directory}"); shift ;;
+    --libexecdir) LIBEXECDIR=$(realpath -m "${2:?--libexecdir needs a directory}"); shift ;;
+    *) echo "usage: $0 [uninstall [--purge]] [--prefix DIR [--libexecdir DIR]] [--no-build]" >&2; exit 2 ;;
+  esac
+  shift
+done
+if [ -n "$LIBEXECDIR" ] && [ -z "$PREFIX" ]; then
+  echo "--libexecdir needs --prefix: a checkout install uses the helpers cargo built" >&2; exit 2
+fi
+case "$PREFIX/" in
+  "$ROOT"/*) echo "--prefix $PREFIX is inside the checkout, where sarab would run as the checkout; pick another" >&2; exit 2 ;;
+esac
+
+if [ -n "$PREFIX" ]; then
+  BINDIR=$PREFIX/bin
+  HELPERS=${LIBEXECDIR:-$PREFIX/lib/sarab}
+  SHARE=$PREFIX/share/sarab
+  DOCDIR=$PREFIX/share/doc/sarab
+  DOC=$DOCDIR/docs/OVERVIEW.md
+else
+  BINDIR=${BINDIR:-$HOME/.local/bin}
+  DOC=$ROOT/docs/OVERVIEW.md
+fi
+SARAB=$BINDIR/sarab
+UNITDIR=${UNITDIR:-${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user}
+UNIT=$UNITDIR/sarab.service
+MARK="# Generated by packaging/install.sh"
+DATA=${XDG_DATA_HOME:-$HOME/.local/share}
+HANDLER=$DATA/applications/sarab-install.desktop
+MIMEXML=$DATA/mime/packages/sarab.xml
+BASHCOMP=$DATA/bash-completion/completions/sarab
+FISHCOMP=${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions/sarab.fish
+
+refresh_databases() {
+  if command -v update-mime-database >/dev/null; then update-mime-database "$DATA/mime" >/dev/null || true; fi
+  if command -v update-desktop-database >/dev/null; then update-desktop-database -q "$DATA/applications" || true; fi
+}
+
+removed() { rm -rf "$1"; echo "removed $1"; }
+
+if [ -n "$PURGE" ] && [ "$ACTION" != uninstall ]; then
+  echo "--purge goes with uninstall" >&2; exit 2
+fi
+
+if [ "$ACTION" = uninstall ]; then
+  if [ -n "$PURGE" ]; then
+    if [ ! -x "$SARAB" ]; then echo "--purge needs $SARAB, which is gone; nothing removed" >&2; exit 1; fi
+    "$SARAB" purge --yes
+  fi
+  if [ -n "$PREFIX" ]; then
+    if [ -f "$SARAB" ] && [ ! -L "$SARAB" ]; then removed "$SARAB"; fi
+    for b in sarab-ns sarab-hostd; do if [ -f "$HELPERS/$b" ]; then removed "$HELPERS/$b"; fi; done
+    rmdir "$HELPERS" 2>/dev/null || true
+    for d in "$SHARE/overlay" "$DOCDIR"; do if [ -d "$d" ]; then removed "$d"; fi; done
+    rmdir "$SHARE" 2>/dev/null || true
+  elif [ "$(readlink "$SARAB" 2>/dev/null || true)" = "$ROOT/target/release/sarab" ]; then
+    removed "$SARAB"
+  elif [ -e "$SARAB" ]; then echo "kept    $SARAB (not our symlink)"; fi
+  if [ -e "$UNIT" ] && grep -qF "$MARK" "$UNIT"; then
+    removed "$UNIT"
+    echo; echo "yours to run:  systemctl --user disable --now sarab && systemctl --user daemon-reload"
+  elif [ -e "$UNIT" ]; then echo "kept    $UNIT (not written by this script)"; fi
+  if [ -f /etc/apparmor.d/sarab-ns ] && grep -qF 'sarab apparmor-profile' /etc/apparmor.d/sarab-ns; then
+    echo "yours to run:  sudo apparmor_parser -R /etc/apparmor.d/sarab-ns && sudo rm /etc/apparmor.d/sarab-ns"
+  fi
+  if [ -e "$HANDLER" ] && grep -q '^X-Sarab-' "$HANDLER"; then removed "$HANDLER"; fi
+  apps=0
+  for e in "$DATA"/applications/sarab.*.desktop; do
+    if [ -f "$e" ] && grep -q '^X-Sarab-Package=' "$e"; then rm -f "$e"; apps=$((apps + 1)); fi
+  done
+  if [ "$apps" -gt 0 ]; then echo "removed $apps app launcher entries"; fi
+  if [ -d "$DATA/sarab/icons" ]; then removed "$DATA/sarab/icons"; fi
+  rmdir "$DATA/sarab" 2>/dev/null || true
+  if [ -e "$MIMEXML" ] && grep -qF "sarab" "$MIMEXML"; then removed "$MIMEXML"; fi
+  for c in "$BASHCOMP" "$FISHCOMP"; do
+    if [ -e "$c" ] && grep -qF "sarab" "$c"; then removed "$c"; fi
+  done
+  refresh_databases
+  if [ -z "$PURGE" ]; then
+    echo "not removed: the image and Android's data (\`sarab purge\`, or uninstall --purge)"
+  fi
+  exit 0
+fi
+
+if [ -n "$BUILD" ]; then
+  if [ -n "$LIBEXECDIR" ]; then SARAB_LIBEXECDIR=$LIBEXECDIR cargo build --release
+  else env -u SARAB_LIBEXECDIR cargo build --release; fi
+fi
+for b in sarab sarab-ns sarab-hostd; do
+  [ -x "target/release/$b" ] || { echo "no target/release/$b -- run me without --no-build" >&2; exit 1; }
+done
+
+mkdir -p "$BINDIR" "$UNITDIR"
+if [ -n "$PREFIX" ]; then
+  if [ -L "$SARAB" ]; then
+    echo "refusing to replace $SARAB, a checkout install's symlink; packaging/install.sh uninstall first" >&2; exit 1
+  fi
+  install -Dm755 target/release/sarab "$SARAB"; echo "wrote   $SARAB"
+  for b in sarab-ns sarab-hostd; do install -Dm755 "target/release/$b" "$HELPERS/$b"; echo "wrote   $HELPERS/$b"; done
+  rm -rf "$SHARE/overlay"
+  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then list() { git ls-files -z overlay; }
+  else list() { find overlay -type f -print0; }; fi
+  list | while IFS= read -r -d '' f; do
+    if [ -x "$f" ]; then m=755; else m=644; fi
+    install -Dm "$m" "$f" "$SHARE/$f"
+  done
+  echo "wrote   $SHARE/overlay"
+  rm -rf "$DOCDIR"
+  for f in README.md SECURITY.md LICENSE docs/OVERVIEW.md docs/TODO.md; do install -Dm644 "$f" "$DOCDIR/$f"; done
+  echo "wrote   $DOCDIR"
+else
+  cur=$(readlink "$SARAB" 2>/dev/null || true)
+  if [ "$cur" = "$ROOT/target/release/sarab" ]; then echo "ok      $SARAB"
+  elif [ -e "$SARAB" ] || [ -n "$cur" ]; then
+    echo "refusing to replace $SARAB (it is ${cur:-a real file}); move it aside" >&2; exit 1
+  else ln -s "$ROOT/target/release/sarab" "$SARAB"; echo "linked  $SARAB -> $ROOT/target/release/sarab"; fi
+fi
+case ":$PATH:" in
+  *":$BINDIR:"*) ;;
+  *) echo "warning: $BINDIR is not on PATH; add it to your shell profile" >&2 ;;
+esac
+
+new=$(sed -e "s|@SARAB@|$SARAB|g" -e "s|@DOC@|$DOC|g" packaging/sarab.service)
+if [ -e "$UNIT" ] && ! grep -qF "$MARK" "$UNIT"; then
+  echo "refusing to overwrite $UNIT (not written by this script); move it aside" >&2; exit 1
+fi
+if [ -e "$UNIT" ] && [ "$new" = "$(cat "$UNIT")" ]; then echo "ok      $UNIT"
+else printf '%s\n' "$new" >"$UNIT"; echo "wrote   $UNIT"; UNIT_CHANGED=1; fi
+
+mkdir -p "$DATA/applications" "$DATA/mime/packages"
+printf '%s\n' \
+  "[Desktop Entry]" \
+  "Type=Application" \
+  "Name=Install Android app" \
+  "Comment=Install into Sarab, the Android runtime" \
+  "Exec=\"$SARAB\" install %f" \
+  "Icon=application-vnd.android.package-archive" \
+  "Terminal=false" \
+  "NoDisplay=true" \
+  "MimeType=application/vnd.android.package-archive;application/x-sarab-app-bundle;" \
+  "Categories=Utility;" \
+  "X-Sarab-Installer=packaging/install.sh" >"$HANDLER"
+echo "wrote   $HANDLER"
+printf '%s\n' \
+  '<?xml version="1.0" encoding="UTF-8"?>' \
+  '<!-- sarab: split APK bundles, so a file manager can hand them to sarab install. -->' \
+  '<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">' \
+  '  <mime-type type="application/x-sarab-app-bundle">' \
+  '    <comment>Android app bundle</comment>' \
+  '    <sub-class-of type="application/zip"/>' \
+  '    <glob pattern="*.apks"/>' \
+  '    <glob pattern="*.xapk"/>' \
+  '    <glob pattern="*.apkm"/>' \
+  '  </mime-type>' \
+  '</mime-info>' >"$MIMEXML"
+echo "wrote   $MIMEXML"
+refresh_databases
+if command -v xdg-mime >/dev/null; then
+  for m in application/vnd.android.package-archive application/x-sarab-app-bundle; do
+    cur=$(xdg-mime query default "$m" 2>/dev/null || true)
+    if [ -z "$cur" ] || [ "$cur" = sarab-install.desktop ]; then
+      xdg-mime default sarab-install.desktop "$m"; echo "default $m -> sarab"
+    else
+      echo "kept    $m -> $cur"
+      echo "        (to use sarab: xdg-mime default sarab-install.desktop $m)"
+    fi
+  done
+fi
+
+mkdir -p "$(dirname "$BASHCOMP")"
+"$SARAB" completion bash >"$BASHCOMP" && echo "wrote   $BASHCOMP"
+if command -v fish >/dev/null; then
+  mkdir -p "$(dirname "$FISHCOMP")"
+  "$SARAB" completion fish >"$FISHCOMP" && echo "wrote   $FISHCOMP"
+fi
+
+echo
+if ! command -v pasta >/dev/null; then
+  PM=$(
+    . /etc/os-release 2>/dev/null || true
+    case " ${ID:-} ${ID_LIKE:-} " in
+      *" arch "*) echo "sudo pacman -S passt" ;;
+      *" debian "* | *" ubuntu "*) echo "sudo apt install passt" ;;
+      *" fedora "* | *" rhel "*) echo "sudo dnf install passt" ;;
+      *" suse "* | *" opensuse "*) echo "sudo zypper install passt" ;;
+      *) echo "install the passt package" ;;
+    esac
+  )
+  echo "needed: pasta, Android's network, which sarab will not boot without: $PM"
+fi
+if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = 1 ] &&
+  [ "$("$SARAB" apparmor-profile)" != "$(cat /etc/apparmor.d/sarab-ns 2>/dev/null)" ]; then
+  echo "needed: an AppArmor profile, since this kernel restricts user namespaces and Android runs in one:"
+  echo "  $SARAB apparmor-profile | sudo tee /etc/apparmor.d/sarab-ns >/dev/null && sudo apparmor_parser -r /etc/apparmor.d/sarab-ns"
+fi
+if [ -n "$PREFIX" ]; then
+  IMAGE=$(cat "${XDG_CONFIG_HOME:-$HOME/.config}/sarab/data-dir" 2>/dev/null || echo "$DATA/sarab/android")
+else IMAGE=$ROOT/images; fi
+if [ ! -f "$IMAGE/system/system/build.prop" ]; then
+  echo "next:   sarab start        # the first time, downloads Android (about 1.4 GB; asks first)"
+  THEN="after that first start, "
+fi
+if [ -n "${UNIT_CHANGED:-}" ]; then
+  echo "not run for you -- ${THEN:-}these are yours:"
+  echo "  systemctl --user daemon-reload"
+  echo "  systemctl --user enable --now sarab     # boots Android now and at every login"
+  echo "or skip the unit: \`sarab start\` boots Android on demand, and so does opening an app."
+fi
+DUE=$("$SARAB" upgrade --check 2>/dev/null || true)
+if [ -n "$DUE" ]; then
+  echo "$DUE"
+  echo "next:   sarab upgrade      # asks first; restarts Android if it is running"
+elif "$SARAB" status >/dev/null 2>&1; then
+  echo "Android is still running the previous build: \`sarab restart\` to use this one"
+fi
+echo "check it with:  sarab status   (logs: sarab logs --daemon)"

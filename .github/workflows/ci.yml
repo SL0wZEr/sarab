@@ -1,0 +1,104 @@
+# No job needs a running Android: the tests exercise the pure decision
+# functions, and the one that needs a Wayland session is #[ignore]d. The
+# install job installs into a temporary prefix twice, once with the helpers in
+# lib/sarab and once with a build-time libexec directory, and runs the installed
+# sarab from outside the checkout with XDG directories of its own, under the
+# runner's temp directory; they go through $GITHUB_ENV because a job's env
+# cannot read the runner context.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  rust:
+    name: fmt, clippy, test, doc
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets
+      - run: cargo test --workspace --locked
+      - run: cargo doc --workspace --no-deps --document-private-items
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  msrv:
+    name: build with rust-version (1.88)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace --all-targets --locked
+
+  deny:
+    name: cargo deny (advisories, bans, sources)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans sources
+
+  install:
+    name: install into a prefix, run from outside the checkout
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: XDG directories of its own
+        run: |
+          {
+            echo "XDG_CONFIG_HOME=$RUNNER_TEMP/config"
+            echo "XDG_DATA_HOME=$RUNNER_TEMP/share"
+            echo "XDG_STATE_HOME=$RUNNER_TEMP/state"
+            echo "XDG_RUNTIME_DIR=$RUNNER_TEMP/run"
+          } >>"$GITHUB_ENV"
+      - name: helpers in lib/sarab
+        run: |
+          mkdir -p "$XDG_RUNTIME_DIR"
+          p=$RUNNER_TEMP/usr
+          PATH=$p/bin:$PATH packaging/install.sh --prefix "$p"
+          cd "$RUNNER_TEMP"
+          "$p/bin/sarab" --help
+          "$p/bin/sarab" info | tee info.txt
+          grep -Eq '^mode +installed$' info.txt
+          grep -Eq "^data +$XDG_DATA_HOME/sarab/android$" info.txt
+          grep -Eq "^overlay +$p/share/sarab/overlay \(ok\)$" info.txt
+          grep -Eq "^sarab-ns +$p/lib/sarab/sarab-ns$" info.txt
+          if grep -F "$GITHUB_WORKSPACE" info.txt "$XDG_CONFIG_HOME/systemd/user/sarab.service"; then exit 1; fi
+          cd "$GITHUB_WORKSPACE"
+          packaging/install.sh uninstall --prefix "$p"
+          test ! -e "$p/bin/sarab"
+          test ! -e "$p/lib/sarab"
+      - name: helpers in a build-time libexec directory
+        run: |
+          p=$RUNNER_TEMP/usr2
+          PATH=$p/bin:$PATH packaging/install.sh --prefix "$p" --libexecdir "$p/libexec/sarab"
+          cd "$RUNNER_TEMP"
+          "$p/bin/sarab" info | tee info.txt
+          grep -Eq "^sarab-hostd +$p/libexec/sarab/sarab-hostd$" info.txt
+          test ! -e "$p/lib/sarab"
+
+  scripts:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck packaging/install.sh apps/*/build.sh apps/media-probe/run.sh overlay/system/bin/iptables

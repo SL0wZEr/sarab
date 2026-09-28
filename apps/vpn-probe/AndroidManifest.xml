@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The VPN probe (build.sh): an activity with no window that starts a
+  VpnService, which opens a tun through /dev/tun and logs the result.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.sarab.vpnprobe">
+    <uses-sdk android:minSdkVersion="33" android:targetSdkVersion="33" />
+    <application android:label="VPN probe" android:hasCode="true">
+        <activity android:name=".Start" android:exported="true"
+            android:theme="@android:style/Theme.NoDisplay" />
+        <service android:name=".Tunnel" android:exported="false"
+            android:permission="android.permission.BIND_VPN_SERVICE">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
+    </application>
+</manifest>

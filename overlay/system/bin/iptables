@@ -1,0 +1,26 @@
+#!/system/bin/sh
+# Stand-in for the image's iptables, bind-mounted over it by `sarab start`
+# (every file under overlay/ is). In the image iptables is one multi-call
+# binary: iptables-restore, ip6tables-restore, ip6tables and the -save tools
+# are symlinks to it, and a bind mount follows a symlink to its target, so
+# this one file stands in for all of them, whatever name it is called by.
+# netd only ever speaks the -restore protocol below to it.
+#
+# Why: legacy xtables tables cannot be created from an unprivileged user
+# namespace on a host that has not loaded the ip_tables modules, so every
+# rule netd installs fails with "unable to initialize table". Real
+# iptables-restore exits on the first error, and netd's
+# IptablesRestoreController respawns it for the next command -- 32 respawns
+# and ~3.5 s of system_server's startup, all spent failing. None of those
+# rules (firewall chains, bandwidth accounting, tethering) ever applied here,
+# so answering "done" costs nothing that was ever available.
+#
+# Protocol (netd IptablesRestoreController.cpp): commands arrive on stdin
+# terminated by a "#PING" line; iptables-restore -v echoes comment lines to
+# stdout, and netd treats the echoed "#PING" as the ack. Anything on stderr
+# is an error, so we print nothing there.
+while IFS= read -r line; do
+  case $line in
+    '#PING'*) printf '%s\n' "$line" ;;
+  esac
+done

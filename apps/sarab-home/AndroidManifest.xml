@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- sarab-home: the smallest possible HOME activity. No code (hasCode=false),
+     no resources; the activity is the framework's own android.app.Activity,
+     which shows an empty window. Installed as the default home so Launcher3
+     (73 MB resident, a home screen we never show) is never started. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.sarab.home" android:versionCode="1" android:versionName="1">
+  <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="33"/>
+  <application android:label="sarab home" android:hasCode="false"
+      android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+    <activity android:name="android.app.Activity" android:exported="true"
+        android:launchMode="singleTask" android:stateNotNeeded="true"
+        android:excludeFromRecents="true" android:clearTaskOnLaunch="true">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.HOME"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+      </intent-filter>
+    </activity>
+  </application>
+</manifest>

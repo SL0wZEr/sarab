@@ -1,0 +1,5 @@
+# sarab: bpffs cannot be mounted and BPF programs cannot be loaded without
+# CAP_SYS_ADMIN in the initial namespace. The image's own bpfloader resolves a
+# failed load by setting bpf.progs_loaded=1; do exactly that, without the abort.
+on load_bpf_programs
+    setprop bpf.progs_loaded 1

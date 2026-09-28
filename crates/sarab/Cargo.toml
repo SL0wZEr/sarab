@@ -1,0 +1,30 @@
+[package]
+name = "sarab"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The sarab command: sets up, starts and stops the Android runtime, and manages its apps"
+
+[dependencies]
+sarab-runtime.workspace = true
+sarab-ns.workspace = true
+anyhow.workspace = true
+cliclack.workspace = true
+console.workspace = true
+libc.workspace = true
+clap.workspace = true
+clap_complete.workspace = true
+serde_json.workspace = true
+zip.workspace = true
+wayland-client.workspace = true
+wayland-protocols.workspace = true
+
+[[bin]]
+name = "sarab"
+path = "src/main.rs"
+
+[lints]
+workspace = true

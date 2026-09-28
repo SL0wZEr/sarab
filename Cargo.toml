@@ -1,0 +1,42 @@
+# rust-version 1.88: let-chains and the dependency tree need it; CI builds with it.
+
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "Apache-2.0"
+repository = "https://github.com/SL0wZEr/sarab"
+publish = false
+
+[workspace.dependencies]
+sarab-runtime = { path = "crates/sarab-runtime" }
+sarab-ns = { path = "crates/sarab-ns" }
+anyhow = "1"
+cliclack = "0.5"
+console = "0.16"
+clap = { version = "4", features = ["derive", "wrap_help"] }
+clap_complete = "4"
+libc = "0.2"
+nix = { version = "0.30", features = ["mount", "sched", "ioctl", "fs", "user", "process", "signal", "poll", "hostname", "socket", "uio"] }
+rsbinder = "0.10"
+serde_json = "1"
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+zbus = "5"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[profile.release]
+strip = true
+lto = "thin"

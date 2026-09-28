@@ -1,0 +1,11 @@
+# Kept out of the repository: build output, the Android image (with the overlay
+# files `sarab setup` generates from it), signing keys, local reference clones,
+# runtime state, and APKs other than our own.
+/target/
+/images/
+/keys/
+/refs/
+/run/
+/apps/*.apk
+/apps/*.apks
+!/apps/sarab-home.apk
